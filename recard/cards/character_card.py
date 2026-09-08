@@ -193,11 +193,23 @@ class CharacterCardGenerator:
 
     async def _fetch_live_detailed_characters(self, uid):
         """Shared HoYoLAB fetch used by both ID-based (_lookup_character_info)
-        and name-based (resolve_by_name) live lookups, so there's exactly
-        one place that knows how to call genshin.py / handle its errors."""
-        from services.abyss import _get_client  # local import: avoid a hard genshin.py/cookie dependency for callers that never hit this path
-        client = _get_client()
-        return await client.get_genshin_detailed_characters(int(uid))
+        and name-based (resolve_by_name) live lookups.
+
+        recard intentionally ships without this: it needs an authenticated
+        HoYoLAB session (genshin.py + LTUID_V2/LTOKEN_V2 cookies), which
+        would make the library credential-required instead of just-a-uid,
+        unlike Enka-based tools such as zenka. It only gets called as a
+        fallback for characters missing from char.json (very new patch
+        characters) or not present in the public Enka showcase at all -
+        everything else works fine without it.
+        """
+        raise RuntimeError(
+            "recard doesn't include an authenticated HoYoLAB fallback. "
+            f"Character with avatarId={uid!r} isn't in the bundled char.json "
+            "snapshot yet (likely a very recent patch) - refresh it with "
+            "`python -m recard.data.update_data`, or wait for a new recard "
+            "release with updated data."
+        )
 
     @staticmethod
     def _entry_from_live_character(match):

@@ -1,0 +1,6 @@
+aiohttp<4,>=3.12
+Pillow>=10.0
+
+[fast-dns]
+aiodns>=3.2.0
+pycares<4.4.0

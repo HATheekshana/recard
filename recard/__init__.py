@@ -17,7 +17,7 @@ Same usage pattern as zenka (the ZZZ card library):
 
 from .client import Card, CardResult, CharacterNotFound, Client, ShowcaseCharacter
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 __all__ = [
     "Client",
