@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recard"
+version = "0.1.0"
+description = "Async Genshin Impact character card generator (Enka.Network showcase -> image), styled after zenka for ZZZ."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Your Name" }]
+keywords = ["genshin", "genshin-impact", "enka", "card", "zenka"]
+dependencies = [
+    "aiohttp>=3.12,<4",
+    "aiodns>=3.2.0",
+    "pycares<4.4.0",
+    "Pillow>=10.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourname/recard"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["recard*"]
+
+[tool.setuptools.package-data]
+recard = [
+    "assets/**/*",
+    "data/*.json",
+]
