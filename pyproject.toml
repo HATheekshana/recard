@@ -9,7 +9,7 @@ description = "Async Genshin Impact character card generator (Enka.Network showc
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Your Name" }]
+authors = [{ name = "HATheekshana" }]
 keywords = ["genshin", "genshin-impact", "enka", "card", "zenka"]
 dependencies = [
     "aiohttp>=3.12,<4",
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourname/recard"
+Homepage = "https://github.com/HATheekshana/recard"
 
 [tool.setuptools]
 include-package-data = true

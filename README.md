@@ -76,4 +76,12 @@ pip install recard
 
 ## License
 
-MIT - see `LICENSE`.
+The code in this repository is MIT-licensed - see `LICENSE`.
+
+**Note on bundled assets:** `recard/assets/` and `recard/data/` ship
+game data, fonts, icons, and character art from Genshin Impact,
+© COGNOSPHERE PTE. LTD. / HoYoverse. These are included for card
+rendering purposes only, are not covered by this project's MIT license,
+and all rights to them remain with their original owner. This project
+is an unofficial fan tool and is not affiliated with or endorsed by
+HoYoverse.
