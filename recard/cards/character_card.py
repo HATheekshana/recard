@@ -1,42 +1,19 @@
-import json
+import asyncio
 import logging
-import os
 from io import BytesIO
 from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageOps, ImageChops, ImageEnhance, ImageFont
 
-from .hoyolab_character_detail import (
-    CharacterBuildFetcher,
-    EnkaClient,
-    draw_build_column,
-    fetch_hoyolab_character_detail,
-    hoyolab_character_detail_to_avatar_record,
-)
+from .build import draw_build_column
 from .artifacts import draw_horizontal_artifacts
 from .watermark import apply_watermark
+from ..services.enka import PlayerDataProvider, character_stats, artifact_record
 from ..services.net import new_session
+from ..services.images import load_custom_image
 
-from pathlib import Path as _Path
-_PKG_ROOT = _Path(__file__).resolve().parent.parent
-
+_PKG_ROOT = Path(__file__).resolve().parent.parent
 logger = logging.getLogger("recard")
-
-# genshin.py element names are already "Anemo"/"Cryo"/etc, same as char.json,
-# so no translation table is needed there - just .capitalize() defensively.
-
-
-def _icon_name_from_url(icon_url):
-    """HoYoLAB's `icon` field is a full CDN URL like
-    '.../UI_AvatarIcon_Odette.png'. char.json/character_card.py only ever
-    want the bare 'UI_AvatarIcon_Odette' part (they build their own
-    enka.network URLs from it), so strip host + extension.
-    """
-    if not icon_url:
-        return None
-    name = icon_url.rsplit("/", 1)[-1]
-    if "." in name:
-        name = name.rsplit(".", 1)[0]
-    return name
 
 W_STAT_ICONS = {
     "FIGHT_PROP_BASE_ATTACK": f"{_PKG_ROOT}/assets/icons/atk.png",
@@ -48,45 +25,6 @@ W_STAT_ICONS = {
     "FIGHT_PROP_HP_PERCENT": f"{_PKG_ROOT}/assets/icons/hp.png",
     "FIGHT_PROP_DEFENSE_PERCENT": f"{_PKG_ROOT}/assets/icons/def.png",
 }
-
-# Enka's character store uses the in-game element labels ("Fire", "Wind",
-# etc.), whereas the card assets and fight-prop lookup use the player-facing
-# labels ("Pyro", "Anemo", etc.).  Keep this conversion at the data boundary
-# so every renderer receives one consistent character record.
-ENKA_ELEMENT_NAMES = {
-    "Fire": "Pyro", "Water": "Hydro", "Wind": "Anemo",
-    "Electric": "Electro", "Ice": "Cryo", "Rock": "Geo",
-    "Grass": "Dendro",
-}
-
-# Character-name quirks between char.json's icon names and enka.network's
-# namecard icon names. Used by _get_namecard_urls() below.
-NAMECARD_NAME_OVERRIDES = {
-    "Ambor": "Amber",
-    "yae": "yae1",
-    "Yae Miko": "yae1",
-    "Miko": "yae1",
-    "Noel": "Noelle",
-    "Feiyan": "Yanfei",
-    "Tohma": "Thoma",
-    "Heizo": "Heizou",
-    "Liney": "Lyney",
-    "Liuyun": "Xianyun",
-}
-
-# Direct, hardcoded namecard URLs for characters not yet present in
-# data.json (e.g. brand-new patch characters like Odette/Alyosha whose
-# namecard entries haven't been indexed there yet). Checked first in
-# _get_namecard_urls() before falling back to the data.json search.
-NAMECARD_URL_HARDCODES = {
-    "Odette": [
-        "https://enka.network/ui/UI_NameCardPic_Odette_P.png",
-    ],
-    "Alyosha": [
-        "https://enka.network/ui/UI_NameCardPic_Alyosha_P.png",
-    ],
-}
-
 
 def draw_text_with_shadow(draw, text, position, font_path, font_size, text_color=(255, 255, 255, 255), shadow_color=(0, 0, 0, 180), anchor="mm", shadow_offset=(2, 2)):
     font = ImageFont.truetype(font_path, font_size)
@@ -135,325 +73,34 @@ def paste_splash_left(ui_layer, splash_image, size, left_align=False):
     return ui_layer
 
 
-class PlayerDataProvider:
-    def __init__(self, enka_client=None):
-        self.enka_client = enka_client or EnkaClient()
-
-    async def fetch_player_profile(self, uid):
-        return await self.enka_client.fetch_avatar_data(uid)
+def namecard_urls(character):
+    # Mondstadt: Whistling Wind (210024), for Aether and Lumine in all elements.
+    if int(character.id) in (10000005, 10000007):
+        full = "https://enka.network/ui/UI_NameCardPic_Md_P.png"
+    elif character.namecard:
+        full = character.namecard.full
+    else:
+        return []
+    return [full.replace("NameCardPic", "NameCardBanner"), full]
 
 
 class CharacterCardGenerator:
-    def __init__(self, char_map_path=f"{_PKG_ROOT}/data/char.json", namecard_path=f"{_PKG_ROOT}/data/data.json", text_map_path=f"{_PKG_ROOT}/data/new.json", splash_directory=None, font_path=f"{_PKG_ROOT}/assets/fonts/Genshin_Impact.ttf"):
-        # custom_splash lives outside the installed package (which may be
-        # read-only site-packages) - default to a per-user writable folder.
-        if splash_directory is None:
-            splash_directory = _Path.home() / ".recard" / "custom_splash"
-            splash_directory.mkdir(parents=True, exist_ok=True)
-        self.char_map_path = char_map_path
-        self.char_map = self._load_json(char_map_path)
-        self.namecard_data = self._load_json(namecard_path)
-        self.text_map = self._load_json(text_map_path)
-        self.splash_directory = Path(splash_directory)
-        self.font_path = font_path
-        self.player_data_provider = PlayerDataProvider()
-        self.build_fetcher = CharacterBuildFetcher()
-
-    @staticmethod
-    def _load_json(file_path):
-        with open(file_path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
-
-    def _normalise_character_info(self, info):
-        """Return a card-ready view of either supported character schema.
-
-        Fresh Enka `characters.json` records have `SideIconName` and
-        `NameTextMapHash`, not the legacy `avataricon` / `name` fields.  The
-        old code treated those records as incomplete and rendered every
-        character with the Zibai fallback icon, which also selected the wrong
-        namecard background.
-        """
-        info = dict(info or {})
-        side_icon = info.get("SideIconName") or ""
-        avatar_icon = info.get("avataricon") or side_icon.replace(
-            "UI_AvatarIcon_Side_", "UI_AvatarIcon_", 1
-        )
-        name = info.get("name") or self.text_map.get(str(info.get("NameTextMapHash", "")))
-        if not name and avatar_icon:
-            name = avatar_icon.replace("UI_AvatarIcon_", "")
-
-        element = info.get("element") or info.get("Element") or "Anemo"
-        element = ENKA_ELEMENT_NAMES.get(str(element).capitalize(), str(element).capitalize())
-        info.update({
-            "name": name or "Unknown Character",
-            "avataricon": avatar_icon or "UI_AvatarIcon_Qin",
-            "element": element,
-        })
-        return info
-
-    async def _fetch_live_detailed_characters(self, uid):
-        """Shared HoYoLAB fetch used by both ID-based (_lookup_character_info)
-        and name-based (resolve_by_name) live lookups.
-
-        recard intentionally ships without this: it needs an authenticated
-        HoYoLAB session (genshin.py + LTUID_V2/LTOKEN_V2 cookies), which
-        would make the library credential-required instead of just-a-uid,
-        unlike Enka-based tools such as zenka. It only gets called as a
-        fallback for characters missing from char.json (very new patch
-        characters) or not present in the public Enka showcase at all -
-        everything else works fine without it.
-        """
-        raise RuntimeError(
-            "recard doesn't include an authenticated HoYoLAB fallback. "
-            f"Character with avatarId={uid!r} isn't in the bundled char.json "
-            "snapshot yet (likely a very recent patch) - refresh it with "
-            "`python -m recard.data.update_data`, or wait for a new recard "
-            "release with updated data."
-        )
-
-    @staticmethod
-    def _entry_from_live_character(match):
-        icon_name = _icon_name_from_url(match.icon) or "UI_AvatarIcon_Qin"
-        return {
-            "name": match.name,
-            "avataricon": icon_name,
-            "rarity": match.rarity,
-            "element": ENKA_ELEMENT_NAMES.get(
-                str(match.element or "Anemo").capitalize(),
-                str(match.element or "Anemo").capitalize(),
-            ),
-        }
-
-    async def resolve_by_name(self, name, uid):
-        """Case-insensitive live HoYoLAB lookup by character name (used when
-        a name doesn't match anything in char.json - e.g. bot.py's !show
-        resolving a brand-new patch character before char.json knows the
-        ID at all). Returns (char_id, entry) on success, or None.
-
-        Callers (bot.py) should merge the returned entry into their own
-        name->id caches - this only updates *this* object's char_map/disk
-        copy, since bot.py keeps a separate in-memory char_map/name_to_id
-        built at startup.
-        """
-        name_lower = name.strip().lower()
-        try:
-            detailed = await self._fetch_live_detailed_characters(uid)
-        except Exception as error:
-            logger.warning("CharacterCardGenerator: live HoYoLAB name lookup failed for uid=%s: %s", uid, error)
-            return None
-
-        match = next(
-            (c for c in detailed.characters if c.name.strip().lower() == name_lower),
-            None,
-        ) or next(
-            (c for c in detailed.characters if name_lower in c.name.strip().lower()),
-            None,
-        )
-        if not match:
-            return None
-
-        entry = self._entry_from_live_character(match)
-        self.char_map[str(match.id)] = entry
-        self._persist_char_map()
-        logger.info("CharacterCardGenerator: resolved '%s' -> char_id=%s (%s) via live HoYoLAB name lookup", name, match.id, entry["name"])
-        return match.id, entry
-
-    async def _lookup_character_info(self, char_id, uid):
-        """Look up char_id in the local char.json cache. If it's missing -
-        almost always because it's a character newer than our last
-        char.json refresh (new patch, e.g. Odette/Alyosha in 7.0) - fetch
-        it live from HoYoLAB's own Character API instead of silently
-        falling back to a wrong placeholder (the old behaviour returned
-        Jean's icon/Anemo for *any* unknown ID, which renders a
-        confidently wrong card instead of an obvious error).
-
-        This is official, always-current data straight from HoYoverse -
-        no third-party repo (Enka's store, nanoka.cc, etc.) to fall behind
-        on. The catch: it only knows about characters uid's own account
-        actually has and has made visible in Battle Chronicle, so it can
-        still fail for a uid that hasn't unlocked/shown that character.
-        """
-        cached = self.char_map.get(str(char_id))
-        if cached:
-            return self._normalise_character_info(cached)
-
-        logger.info(
-            "CharacterCardGenerator: char_id=%s not in char.json, trying live HoYoLAB lookup for uid=%s",
-            char_id, uid,
-        )
-        try:
-            detailed = await self._fetch_live_detailed_characters(uid)
-        except Exception as error:
-            logger.warning("CharacterCardGenerator: live HoYoLAB lookup failed for uid=%s: %s", uid, error)
-            raise RuntimeError(
-                f"Character {char_id} isn't in char.json yet and the live HoYoLAB lookup for "
-                f"uid={uid} failed ({error}). It may be a very new character HoYoLAB hasn't "
-                f"indexed for this account yet, or LTUID_V2/LTOKEN_V2 aren't configured."
-            ) from error
-
-        match = next((c for c in detailed.characters if str(c.id) == str(char_id)), None)
-        if not match:
-            raise RuntimeError(
-                f"Character {char_id} isn't in char.json, and uid={uid}'s HoYoLAB Battle Chronicle "
-                f"doesn't show it either (not unlocked, or Battle Chronicle privacy is set to private)."
-            )
-
-        entry = self._entry_from_live_character(match)
-
-        self.char_map[str(char_id)] = entry
-        self._persist_char_map()
-        logger.info("CharacterCardGenerator: learned char_id=%s (%s) from live HoYoLAB lookup, saved to char.json", char_id, entry["name"])
-        return self._normalise_character_info(entry)
-
-    def _persist_char_map(self):
-        """Write self.char_map back to char.json so a live-fetched
-        character only needs to be fetched once, not on every card."""
-        try:
-            with open(self.char_map_path, "w", encoding="utf-8") as handle:
-                json.dump(self.char_map, handle, ensure_ascii=False, indent=2)
-        except Exception as error:
-            # Not fatal - the card can still render this once from memory,
-            # it'll just have to hit the live lookup again next time.
-            logger.warning("CharacterCardGenerator: failed to persist char.json: %s", error)
-
-    def _get_namecard_urls(self, avatar_icon):
-        base_name = avatar_icon.replace("UI_AvatarIcon_", "")
-
-        # Hardcoded overrides for characters not yet indexed in data.json
-        # (e.g. brand-new patch characters). Checked before the normal
-        # data.json search so these always resolve correctly.
-        hardcoded = NAMECARD_URL_HARDCODES.get(base_name)
-        if hardcoded:
-            return hardcoded
-
-        search_name = NAMECARD_NAME_OVERRIDES.get(base_name, base_name)
-        for _, info in self.namecard_data.items():
-            icon_name = info.get("icon", "")
-            if f"_{search_name}_" in icon_name:
-                banner_url = icon_name.replace("NameCardPic", "NameCardBanner")
-                return [f"https://enka.network/ui/{banner_url}.png", f"https://enka.network/ui/{icon_name}.png"]
-        return ["https://enka.network/ui/UI_NameCardPic_Yae1_P.png"]
-
-    @staticmethod
-    def _get_splash_url(avatar_icon):
-        base_name = avatar_icon.replace("UI_AvatarIcon_", "")
-        return f"https://enka.network/ui/UI_Gacha_AvatarImg_{base_name}.png"
-
-    def _get_weapon_name(self, weapon_info):
-        # Live HoYoLAB lookups (character/detail) give us the weapon's
-        # name directly - no text-map hash lookup needed or possible,
-        # since that endpoint's icon URLs are hash-named, not the
-        # semantic Enka names text_map.json is keyed by.
-        direct_name = weapon_info.get("weaponName")
-        if direct_name:
-            return direct_name
-        name_hash = str(weapon_info.get("hash", ""))
-        return self.text_map.get(name_hash, f"Weapon {weapon_info.get('id')}")
-
-    def _find_avatar_record(self, avatar_list, char_id):
-        return next((entry for entry in avatar_list if str(entry.get("avatarId")) == str(char_id)), None)
-
-    async def _ensure_character_record(self, uid, char_id, player_profile):
-        """Merge a missing character into the Enka profile using HoYoLAB's
-        own character/detail endpoint, but only when the Enka avatar list
-        doesn't already contain this avatarId. This keeps the normal fast
-        path on Enka and only falls back to a live, authenticated HoYoLAB
-        lookup when needed - and unlike the old roster-only fallback, this
-        merges the *full* record (stats/weapon/artifacts), not an empty
-        skeleton, so the card can actually render them."""
-        avatar_list = player_profile.setdefault("avatarInfoList", [])
-        if self._find_avatar_record(avatar_list, char_id):
-            return True
-
-        try:
-            char_data = await fetch_hoyolab_character_detail(uid, char_id)
-        except Exception as error:
-            logger.warning("CharacterCardGenerator: HoYoLAB fallback failed for uid=%s char_id=%s: %s", uid, char_id, error)
-            return False
-
-        if not char_data:
-            return False
-
-        merged_entry = hoyolab_character_detail_to_avatar_record(char_data)
-        if not merged_entry.get("avatarId"):
-            merged_entry["avatarId"] = int(char_id)
-        avatar_list.append(merged_entry)
-        logger.info("CharacterCardGenerator: merged char_id=%s into uid=%s from live HoYoLAB character/detail", char_id, uid)
-        return True
-
-    def _extract_character_stats(self, avatar_list, char_id, element):
-        element = element.capitalize()
-        element_map = {
-            "Pyro": 40,
-            "Electro": 41,
-            "Hydro": 42,
-            "Dendro": 43,
-            "Anemo": 44,
-            "Geo": 45,
-            "Cryo": 46,
-            "Physical": 30,
-        }
-        bonus_id = element_map.get(element)
-
-        for avatar_entry in avatar_list:
-            if str(avatar_entry.get("avatarId")) != str(char_id):
-                continue
-            fight_props = avatar_entry.get("fightPropMap", {})
-            equips = avatar_entry.get("equipList", [])
-            weapon_info = {}
-            for item in equips:
-                if not item.get("weapon"):
-                    continue
-                flat_data = item.get("flat", {})
-                weapon_data = item.get("weapon")
-                weapon_info = {
-                    "id": item.get("itemId"),
-                    "level": weapon_data.get("level"),
-                    "rarity": flat_data.get("rankLevel"),
-                    "icon": flat_data.get("icon"),
-                    "icon_url": flat_data.get("icon_url"),
-                    "hash": flat_data.get("nameTextMapHash"),
-                    "weaponName": flat_data.get("weaponName"),
-                    "refinement": list(weapon_data.get("affixMap", {0: 0}).values())[0] + 1,
-                    "stats": [
-                        {"prop": stat.get("appendPropId"), "val": stat.get("statValue")}
-                        for stat in flat_data.get("weaponStats", [])
-                    ],
-                    "rank": flat_data.get("rankLevel", 5),
-                }
-                break
-
-            elem_bonus = (self._get_prop(fight_props, bonus_id) + self._get_prop(fight_props, 26) + self._get_prop(fight_props, 27)) * 100
-            return {
-                "char_level": avatar_entry.get("propMap", {}).get("4001", {}).get("val", 1),
-                "friendship": avatar_entry.get("fetterInfo", {}).get("expLevel", 1),
-                "hp": self._get_prop(fight_props, 2000),
-                "atk": self._get_prop(fight_props, 2001),
-                "def": self._get_prop(fight_props, 2002),
-                "em": self._get_prop(fight_props, 28),
-                "cr": self._get_prop(fight_props, 20) * 100,
-                "cd": self._get_prop(fight_props, 22) * 100,
-                "er": self._get_prop(fight_props, 23) * 100,
-                "elem_bonus": elem_bonus,
-                "element": element,
-                "weapon": weapon_info,
-            }
-        return None
-
-    @staticmethod
-    def _get_prop(stats_dict, prop_id):
-        if prop_id is None:
-            return 0
-        return stats_dict.get(str(prop_id), stats_dict.get(int(prop_id), 0))
+    def __init__(self, splash_directory=None, font_path=None, player_data_provider=None):
+        self.splash_directory = Path(splash_directory) if splash_directory is not None else Path.home() / ".recard" / "custom_splash"
+        self.font_path = str(font_path or _PKG_ROOT / "assets/fonts/Genshin_Impact.ttf")
+        self.player_data_provider = player_data_provider or PlayerDataProvider()
 
     async def _load_custom_splash(self, char_id):
         for extension in (".png", ".jpg", ".jpeg", ".webp"):
             custom_file = self.splash_directory / f"{char_id}{extension}"
             if custom_file.exists():
-                return Image.open(custom_file).convert("RGBA")
+                with Image.open(custom_file) as image:
+                    return image.convert("RGBA")
         return None
 
     async def _load_image(self, session, url):
+        if not url:
+            return None
         try:
             async with session.get(url, timeout=10) as response:
                 if response.status != 200:
@@ -462,60 +109,44 @@ class CharacterCardGenerator:
         except Exception:
             return None
 
-    async def generate_card(self, uid, char_id):
-        player_profile = await self.player_data_provider.fetch_player_profile(uid)
-        if not player_profile or not player_profile.get("avatarInfoList"):
-            raise RuntimeError(f"No player profile available for uid={uid}")
+    async def generate_card(self, uid, char_id, *, profile=None, custom_image=None):
+        if profile is None:
+            profile = await self.player_data_provider.fetch_player_profile(uid)
+        character = next((c for c in profile.characters if str(c.id) == str(char_id)), None)
+        if character is None:
+            raise RuntimeError(f"Character {char_id} is not in uid={uid}'s public showcase")
+        if character.icon is None or not character.icon.side_icon_ui_path or not character.name:
+            raise RuntimeError(f"Missing Enka assets for character {char_id}; run await client.update_assets()")
 
-        if not self._find_avatar_record(player_profile["avatarInfoList"], char_id):
-            if not await self._ensure_character_record(uid, char_id, player_profile):
-                raise RuntimeError(f"Character record not found for char_id={char_id} in uid={uid}")
-
-        # Reuse the profile we just fetched above instead of asking
-        # Enka for the same uid's data a second time.
-        build_data, talent_icons, constellation_icons = await self.build_fetcher.fetch_build_assets(
-            uid, char_id, avatar_data=player_profile
-        )
-        if not build_data:
-            raise RuntimeError(f"No build/assets data found for uid={uid}, char_id={char_id}")
-
-        character_info = await self._lookup_character_info(char_id, uid)
-        avatar_record = self._find_avatar_record(player_profile["avatarInfoList"], char_id)
-        if not avatar_record:
-            raise RuntimeError(f"Character record not found for char_id={char_id} in uid={uid}")
-
-        stats = self._extract_character_stats(player_profile["avatarInfoList"], char_id, character_info.get("element", "Anemo"))
-        if not stats:
-            raise RuntimeError(f"Character stats not found for char_id={char_id} in uid={uid}")
-
-        avatar_icon = character_info["avataricon"]
-        character_name = character_info["name"]
+        talents_by_id = {talent.id: talent for talent in character.talents}
+        talents = [talents_by_id[i] for i in character.talent_order if i in talents_by_id][:3]
+        build_data = {
+            "talents": [talent.level for talent in talents],
+            "cons_count": character.constellations_unlocked,
+            "cons_unlocked": [const.unlocked for const in character.constellations],
+        }
+        async with new_session() as session:
+            talent_icons = await asyncio.gather(*[self._load_image(session, t.icon) for t in talents])
+            constellation_icons = await asyncio.gather(*[self._load_image(session, c.icon) for c in character.constellations])
+        stats = character_stats(character)
+        avatar_record = artifact_record(character)
+        character_name = character.name
         character_level = stats.get("char_level", 1)
         friendship_level = stats.get("friendship", 1)
         target_size = (1875, 890)
         font_small = ImageFont.truetype(self.font_path, 20)
 
         async with new_session() as session:
-            custom_splash = await self._load_custom_splash(char_id)
-            splash_image = custom_splash or await self._load_image(session, self._get_splash_url(avatar_icon))
-            background_url = self._get_namecard_urls(avatar_icon)
+            custom_splash = load_custom_image(custom_image) if custom_image is not None else await self._load_custom_splash(char_id)
+            splash_image = custom_splash or await self._load_image(session, character.icon.gacha)
+            background_url = namecard_urls(character)
             background_image = None
             for url in background_url:
                 background_image = await self._load_image(session, url)
                 if background_image:
                     break
 
-            weapon_icon = stats["weapon"].get("icon")
-            weapon_icon_url = stats["weapon"].get("icon_url")
-            if weapon_icon_url:
-                # Live HoYoLAB data - already a full, directly-fetchable
-                # CDN URL (hash-named, so it can't be reconstructed as an
-                # enka.network/ui/... path the way Enka's own icons can).
-                weapon_image = await self._load_image(session, weapon_icon_url)
-            elif weapon_icon:
-                weapon_image = await self._load_image(session, f"https://enka.network/ui/{weapon_icon}.png")
-            else:
-                weapon_image = None
+            weapon_image = await self._load_image(session, character.weapon.icon)
 
             if not background_image:
                 background_image = Image.new("RGBA", target_size, (30, 30, 45, 255))
@@ -538,8 +169,9 @@ class CharacterCardGenerator:
             name_font = ImageFont.truetype(self.font_path, name_font_size)
             name_width = draw.textlength(character_name, font=name_font)
             draw_text_with_shadow(draw, text=character_name, position=(50, 50), font_path=self.font_path, font_size=name_font_size, anchor="lm")
-            draw_text_with_shadow(draw, text=player_profile.get("nickname", ""), position=(50 + name_width + 20, 52), font_path=self.font_path, font_size=24, text_color=(205, 205, 215, 255), anchor="lm")
-            draw_text_with_shadow(draw, text=f"Lvl: {character_level}/90", position=(50, 90), font_path=self.font_path, font_size=24, anchor="lm")
+            draw_text_with_shadow(draw, text=profile.player.nickname, position=(50 + name_width + 20, 52), font_path=self.font_path, font_size=24, text_color=(205, 205, 215, 255), anchor="lm")
+            level_label = f"Lvl: {character_level}" + (f"/{character.max_level}" if character.max_level else "")
+            draw_text_with_shadow(draw, text=level_label, position=(50, 90), font_path=self.font_path, font_size=24, anchor="lm")
             draw_text_with_shadow(draw, text=f"Friendship: {friendship_level}", position=(50, 125), font_path=self.font_path, font_size=24, anchor="lm")
 
             # Shared left edge for the whole right-hand panel so the weapon
@@ -552,11 +184,11 @@ class CharacterCardGenerator:
             if weapon_image:
                 weapon_icon_resized = ImageOps.contain(weapon_image, (135, 135))
                 ui_layer.paste(weapon_icon_resized, weapon_position, weapon_icon_resized)
-                draw_text_with_shadow(draw, self._get_weapon_name(stats["weapon"]), (weapon_text_x, 45), self.font_path, 30, anchor="lm")
+                draw_text_with_shadow(draw, character.weapon.name, (weapon_text_x, 45), self.font_path, 30, anchor="lm")
                 refinement = stats["weapon"].get("refinement", 1)
                 weapon_level = stats["weapon"].get("level", 1)
-                max_level = "90" if stats["weapon"].get("rank", 0) == 5 else "80" if stats["weapon"].get("rank", 0) == 4 else "70"
-                level_text = f"R{refinement}   Lv.{weapon_level}/{max_level}"
+                max_level = character.weapon.max_level
+                level_text = f"R{refinement}   Lv.{weapon_level}" + (f"/{max_level}" if max_level else "")
                 draw_text_with_shadow(draw, level_text, (weapon_text_x, 88), self.font_path, 22, anchor="lm")
                 weapon_stats = stats["weapon"].get("stats", [])
 

@@ -16,8 +16,9 @@ Same usage pattern as zenka (the ZZZ card library):
 """
 
 from .client import Card, CardResult, CharacterNotFound, Client, ShowcaseCharacter
+from .services.hoyolab import HoYoLABError
 
-__version__ = "0.1.2"
+__version__ = "0.4.2"
 
 __all__ = [
     "Client",
@@ -25,5 +26,6 @@ __all__ = [
     "Card",
     "CardResult",
     "CharacterNotFound",
+    "HoYoLABError",
     "__version__",
 ]

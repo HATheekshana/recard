@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recard"
-version = "0.1.2"
+version = "0.4.2"
 description = "Async Genshin Impact character card generator (Enka.Network showcase -> image), styled after zenka for ZZZ."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,9 +14,11 @@ keywords = ["genshin", "genshin-impact", "enka", "card", "zenka"]
 dependencies = [
     "aiohttp>=3.12,<4",
     "Pillow>=10.0",
+    "enka>=2.5.20,<3",
 ]
 
 [project.optional-dependencies]
+hoyolab = ["genshin>=1.7.27,<2"]
 # Faster/more reliable DNS resolution - genuinely optional: net.py already
 # falls back to aiohttp's default resolver when this isn't installed.
 # Needs a C compiler on some platforms (notably Windows without MSVC Build
@@ -38,5 +40,4 @@ include = ["recard*"]
 [tool.setuptools.package-data]
 recard = [
     "assets/**/*",
-    "data/*.json",
 ]

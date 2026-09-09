@@ -1,6 +1,10 @@
 aiohttp<4,>=3.12
 Pillow>=10.0
+enka<3,>=2.5.20
 
 [fast-dns]
 aiodns>=3.2.0
 pycares<4.4.0
+
+[hoyolab]
+genshin<2,>=1.7.27

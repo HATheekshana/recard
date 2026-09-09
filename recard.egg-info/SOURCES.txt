@@ -56,7 +56,6 @@ recard/assets/icons/hydro.png
 recard/assets/icons/no_data.png
 recard/assets/icons/phys.png
 recard/assets/icons/pyro.png
-recard/assets/icons/radar_bg.png
 recard/assets/icons/stars/Star1.png
 recard/assets/icons/stars/Star2.png
 recard/assets/icons/stars/Star3.png
@@ -75,14 +74,15 @@ recard/assets/talents/ADAPT.png
 recard/assets/talents/bg.png
 recard/cards/__init__.py
 recard/cards/artifacts.py
+recard/cards/build.py
 recard/cards/character_card.py
+recard/cards/chevron.py
 recard/cards/hoyolab_character_detail.py
 recard/cards/watermark.py
 recard/data/__init__.py
-recard/data/avatars.json
-recard/data/char.json
-recard/data/data.json
-recard/data/new.json
 recard/data/update_data.py
 recard/services/__init__.py
+recard/services/enka.py
+recard/services/hoyolab.py
+recard/services/images.py
 recard/services/net.py
