@@ -218,3 +218,6 @@ Chevron style in 0.4.1 uses a charcoal halftone background with element accents,
 
 
 In 0.4.2 the namecard is clipped behind character art only (opaque custom images can cover it). Character level is larger; all three talents align in a straight diagonal row inside the strip.
+
+
+Version 0.4.4 restores the character namecard across chevron with 70%-opaque charcoal panels. Missing namecards fall back to the element texture.

@@ -3,7 +3,7 @@ import asyncio
 from io import BytesIO
 from math import cos, sin, pi
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance, ImageChops, ImageColor
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance, ImageChops, ImageColor, ImageFilter
 
 from .character_card import CharacterCardGenerator, namecard_urls, _PKG_ROOT
 from ..services.enka import character_stats
@@ -40,6 +40,33 @@ def percentage(stat):
 
 
 class ChevronCardGenerator(CharacterCardGenerator):
+    @staticmethod
+    def _panel(canvas, box, radius=16, polygon=False, fill=(16,18,16,178), outline=(160,170,160,150)):
+        # Composite onto the background rather than storing alpha in the JPEG.
+        layer=Image.new('RGBA',canvas.size)
+        draw=ImageDraw.Draw(layer)
+        if polygon:
+            draw.polygon(box,fill=fill)
+        else:
+            draw.rounded_rectangle(box,radius=radius,fill=fill,outline=outline,width=2)
+        canvas.alpha_composite(layer)
+
+    @staticmethod
+    def _namecard_tint(background, accent):
+        if background is None:
+            rgb=ImageColor.getrgb(accent)
+        else:
+            sample=background.convert('RGB').resize((64,64)).quantize(colors=8)
+            palette=sample.getpalette()
+            # Prefer a prominent colourful swatch over white/grey decoration.
+            candidates=[]
+            for count,index in sample.getcolors():
+                color=palette[index*3:index*3+3]
+                saturation=(max(color)-min(color))/max(1,max(color))
+                candidates.append((count*(.1+saturation),color))
+            rgb=max(candidates,key=lambda item:item[0])[1]
+        return tuple(round(channel*.32) for channel in rgb)+(178,)
+
     def _font(self, size):
         return ImageFont.truetype(self.font_path, size)
 
@@ -116,7 +143,14 @@ class ChevronCardGenerator(CharacterCardGenerator):
     def render(self, uid, profile, c, custom, splash, background, weapon_image,
                talents, talent_images, artifacts, artifact_images, const_images):
         accent=COLORS.get(c.element.name.capitalize(),'#c1c9d4')
+        panel_fill=self._namecard_tint(background,accent)
         canvas=element_background(accent)
+        if background is not None:
+            bg=ImageOps.fit(background.convert('RGBA'),SIZE,method=Image.Resampling.LANCZOS)
+            bg=bg.filter(ImageFilter.GaussianBlur(radius=5))
+            # Subdue the right-side namecard; the original left crop is
+            # composited separately below and stays sharp and unchanged.
+            canvas=Image.blend(Image.new('RGBA',SIZE,'#151915'),bg,.43)
         left=[(24,24),(470,24),(835,510),(370,1176),(24,1176)]
         if background is not None:
             # Clip the namecard to the character section only.
@@ -144,7 +178,7 @@ class ChevronCardGenerator(CharacterCardGenerator):
         draw.line([(470,24),(835,510),(370,1176)],fill=accent,width=3)
         draw.line([(600,24),(960,510),(500,1176)],fill=accent,width=2)
         for index,talent in enumerate(talents):
-            x,y=[(622,130),(735,281),(848,432)][index]
+            x,y=[(666,189),(735,281),(804,373)][index]
             self._medallion(canvas,(x,y),talent_images[index],str(talent.level),accent,True,31)
         for index,constellation in enumerate(c.constellations[:6]):
             x=int(835-index*73); y=600+index*105
@@ -153,7 +187,7 @@ class ChevronCardGenerator(CharacterCardGenerator):
         draw=ImageDraw.Draw(canvas)
         self._text(draw,(54,53),'CHARACTER BUILD',18,accent)
         # Weapon and player are stacked beside the top-right stat panel.
-        draw.rounded_rectangle((910,45,1404,284),radius=16,fill='#181818',outline='#484848',width=2)
+        self._panel(canvas,(910,45,1404,284),fill=panel_fill)
         self._text(draw,(1072,66),'WEAPON',17,accent)
         self._paste(canvas,weapon_image,(922,78,140,157))
         draw=ImageDraw.Draw(canvas)
@@ -169,12 +203,12 @@ class ChevronCardGenerator(CharacterCardGenerator):
                    'FIGHT_PROP_HP_PERCENT':'HP','FIGHT_PROP_DEFENSE_PERCENT':'DEF'}.get(stat.type.value,'STAT')
             self._text(draw,(935+i*230,219),label,14,'#bdbdbd',width=215)
             self._text(draw,(935+i*230,245),value,23,accent)
-        draw.rounded_rectangle((1000,305,1404,491),radius=16,fill='#181818',outline='#484848',width=2)
+        self._panel(canvas,(1000,305,1404,491),fill=panel_fill)
         self._text(draw,(1026,327),'PLAYER',17,accent)
         self._text(draw,(1026,365),profile.player.nickname or 'Traveler',28,width=345)
         self._text(draw,(1026,407),f'UID  {uid}',21,'#bdbdbd')
         self._text(draw,(1026,449),f'Friendship  {c.friendship_level}',19,'#bdbdbd')
-        draw.rounded_rectangle((1430,45,1976,491),radius=16,fill='#151515',outline='#484848',width=2)
+        self._panel(canvas,(1430,45,1976,491),fill=panel_fill)
         self._text(draw,(1458,67),'CHARACTER STATS',17,accent)
         stats=character_stats(c)
         fields=[('Max HP','hp','hp','{:.0f}'),('ATK','atk','atk','{:.0f}'),
@@ -184,13 +218,13 @@ class ChevronCardGenerator(CharacterCardGenerator):
                 (f'{stats["element"]} DMG','elem_bonus',stats['element'].lower(),'{:.1f}%')]
         for i,(label,key,icon,fmt) in enumerate(fields):
             y=111+i*45
-            if i%2==0: draw.rounded_rectangle((1446,y-4,1960,y+35),radius=6,fill='#292929')
+            if i%2==0: self._panel(canvas,(1446,y-4,1960,y+35),radius=6,fill=(160,170,160,30),outline=None)
             self._paste(canvas,self._local(f'assets/icons/{icon}.png'),(1456,y,28,28))
             draw=ImageDraw.Draw(canvas)
             self._text(draw,(1499,y+2),label,20,width=290)
             self._text(draw,(1937,y+2),fmt.format(stats[key]),23,anchor='ra')
         # Character identity spans the centre of the right-hand side.
-        draw.polygon([(969,518),(1976,518),(1976,654),(875,654)],fill='#303030')
+        self._panel(canvas,[(969,518),(1976,518),(1976,654),(875,654)],polygon=True,fill=panel_fill)
         draw.line((969,518,1976,518),fill=accent,width=3)
         self._text(draw,(984,547),c.name,46,width=540)
         cap=f'/{c.max_level}' if c.max_level else ''
@@ -204,7 +238,7 @@ class ChevronCardGenerator(CharacterCardGenerator):
         slots=['EQUIP_BRACER','EQUIP_NECKLACE','EQUIP_SHOES','EQUIP_RING','EQUIP_DRESS']
         for i,slot in enumerate(slots):
             x=900+(i%3)*360; y=711+(i//3)*231
-            self._artifact(canvas,(x,y),by_slot.get(slot),accent)
+            self._artifact(canvas,(x,y),by_slot.get(slot),accent,panel_fill)
         self._paste(canvas,self._local('assets/logo.png'),(1734,968,150,150))
         draw=ImageDraw.Draw(canvas)
         self._text(draw,(1809,1125),'RECARD',17,accent,anchor='ma')
@@ -221,15 +255,18 @@ class ChevronCardGenerator(CharacterCardGenerator):
         draw.rounded_rectangle((x-26,y+radius-6,x+26,y+radius+23),radius=9,fill='#090909')
         self._text(draw,(x,y+radius-3),label,18,accent if unlocked else '#8994a3',anchor='ma')
 
-    def _artifact(self,canvas,xy,item,accent):
+    def _artifact(self,canvas,xy,item,accent,panel_fill=(16,18,16,178)):
         x,y=xy; draw=ImageDraw.Draw(canvas)
-        draw.rounded_rectangle((x,y,x+342,y+212),radius=13,fill='#191919',outline='#454545',width=2)
+        self._panel(canvas,(x,y,x+342,y+212),radius=13,fill=panel_fill)
         if item is None:
             self._text(draw,(x+171,y+91),'Not equipped',20,'#718094',anchor='ma')
             return
         a,image=item
         self._paste(canvas,image,(x+4,y+10,112,116))
         draw=ImageDraw.Draw(canvas)
+        cv=sum(stat.value * (2 if stat.type.value == 'FIGHT_PROP_CRITICAL' else 1)
+               for stat in a.sub_stats
+               if stat.type.value in ('FIGHT_PROP_CRITICAL','FIGHT_PROP_CRITICAL_HURT'))
         self._stars(draw,x+16,y+145,a.rarity,6)
         self._text(draw,(x+14,y+174),f'+{a.level}',22,accent)
         main=a.main_stat
@@ -239,7 +276,8 @@ class ChevronCardGenerator(CharacterCardGenerator):
                  'Fire Add Hurt':'Pyro DMG','Water Add Hurt':'Hydro DMG','Elec Add Hurt':'Electro DMG',
                  'Wind Add Hurt':'Anemo DMG','Ice Add Hurt':'Cryo DMG','Rock Add Hurt':'Geo DMG','Grass Add Hurt':'Dendro DMG'}
         self._text(draw,(x+126,y+15),aliases.get(prop,prop),17,'#bdbdbd',width=199)
-        self._text(draw,(x+126,y+43),f'{main.value:g}'+('%' if percentage(main) else ''),29,accent)
+        self._text(draw,(x+126,y+43),f'{main.value:g}'+('%' if percentage(main) else ''),29,accent,width=105)
+        self._text(draw,(x+324,y+50),f'{cv:.1f} CV',18,accent,width=88,anchor='ra')
         short={'FIGHT_PROP_CRITICAL':'CR','FIGHT_PROP_CRITICAL_HURT':'CD','FIGHT_PROP_CHARGE_EFFICIENCY':'ER',
                'FIGHT_PROP_ELEMENT_MASTERY':'EM','FIGHT_PROP_ATTACK':'ATK','FIGHT_PROP_HP':'HP','FIGHT_PROP_DEFENSE':'DEF',
                'FIGHT_PROP_ATTACK_PERCENT':'ATK','FIGHT_PROP_HP_PERCENT':'HP','FIGHT_PROP_DEFENSE_PERCENT':'DEF'}
@@ -247,3 +285,4 @@ class ChevronCardGenerator(CharacterCardGenerator):
             y0=y+91+i*27
             self._text(draw,(x+126,y0),short.get(stat.type.value,stat.type.name),17,'#bdbdbd',width=100)
             self._text(draw,(x+324,y0),f'{stat.value:g}'+('%' if percentage(stat) else ''),19,anchor='ra')
+
