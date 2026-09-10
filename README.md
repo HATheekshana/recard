@@ -221,3 +221,8 @@ In 0.4.2 the namecard is clipped behind character art only (opaque custom images
 
 
 Version 0.4.4 restores the character namecard across chevron with 70%-opaque charcoal panels. Missing namecards fall back to the element texture.
+
+
+## Third style: textured
+
+Use `await client.card(uid, character_id, style="textured")` for the dark halftone background and solid charcoal info panels. Element accents, custom artwork, namecard behind character art, and artifact CV remain supported. Existing `classic` and `chevron` styles are unchanged.

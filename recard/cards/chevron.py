@@ -40,6 +40,8 @@ def percentage(stat):
 
 
 class ChevronCardGenerator(CharacterCardGenerator):
+    textured = False
+
     @staticmethod
     def _panel(canvas, box, radius=16, polygon=False, fill=(16,18,16,178), outline=(160,170,160,150)):
         # Composite onto the background rather than storing alpha in the JPEG.
@@ -143,9 +145,9 @@ class ChevronCardGenerator(CharacterCardGenerator):
     def render(self, uid, profile, c, custom, splash, background, weapon_image,
                talents, talent_images, artifacts, artifact_images, const_images):
         accent=COLORS.get(c.element.name.capitalize(),'#c1c9d4')
-        panel_fill=self._namecard_tint(background,accent)
+        panel_fill=(24,24,24,255) if self.textured else self._namecard_tint(background,accent)
         canvas=element_background(accent)
-        if background is not None:
+        if background is not None and not self.textured:
             bg=ImageOps.fit(background.convert('RGBA'),SIZE,method=Image.Resampling.LANCZOS)
             bg=bg.filter(ImageFilter.GaussianBlur(radius=5))
             # Subdue the right-side namecard; the original left crop is
@@ -175,6 +177,9 @@ class ChevronCardGenerator(CharacterCardGenerator):
         # The two angled strips carry three talents and six constellations.
         ribbon=[(470,24),(600,24),(960,510),(500,1176),(370,1176),(835,510)]
         draw.polygon(ribbon,fill='#303030')
+        # Element-coloured lower ribbon shared by chevron and textured.
+        constellation_fill=tuple(round(channel*.45) for channel in ImageColor.getrgb(accent))
+        draw.polygon([(835,510),(960,510),(500,1176),(370,1176)],fill=constellation_fill)
         draw.line([(470,24),(835,510),(370,1176)],fill=accent,width=3)
         draw.line([(600,24),(960,510),(500,1176)],fill=accent,width=2)
         for index,talent in enumerate(talents):
@@ -286,3 +291,8 @@ class ChevronCardGenerator(CharacterCardGenerator):
             self._text(draw,(x+126,y0),short.get(stat.type.value,stat.type.name),17,'#bdbdbd',width=100)
             self._text(draw,(x+324,y0),f'{stat.value:g}'+('%' if percentage(stat) else ''),19,anchor='ra')
 
+
+
+class TexturedCardGenerator(ChevronCardGenerator):
+    """Dark halftone variant with opaque panels and element accents."""
+    textured = True

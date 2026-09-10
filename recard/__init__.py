@@ -18,7 +18,7 @@ Same usage pattern as zenka (the ZZZ card library):
 from .client import Card, CardResult, CharacterNotFound, Client, ShowcaseCharacter
 from .services.hoyolab import HoYoLABError
 
-__version__ = "0.4.8"
+__version__ = "0.5.1"
 
 __all__ = [
     "Client",

@@ -34,7 +34,7 @@ from typing import List, Optional
 from PIL import Image
 
 from .cards.character_card import CharacterCardGenerator
-from .cards.chevron import ChevronCardGenerator
+from .cards.chevron import ChevronCardGenerator, TexturedCardGenerator
 from .services.hoyolab import HoYoLABError, HoYoLABProvider
 from .services.enka import enrich_namecards
 from .services.images import save_custom_image, remove_custom_image
@@ -163,9 +163,9 @@ class Client:
             character_id = character
             character = None
 
-        if style not in ("classic", "chevron"):
-            raise ValueError("style must be 'classic' or 'chevron'.")
-        generator = self._classic if style == "classic" else ChevronCardGenerator(
+        if style not in ("classic", "chevron", "textured"):
+            raise ValueError("style must be 'classic', 'chevron', or 'textured'.")
+        generator = self._classic if style == "classic" else (TexturedCardGenerator if style == "textured" else ChevronCardGenerator)(
             splash_directory=self._classic.splash_directory,
             font_path=self._classic.font_path,
             player_data_provider=self._classic.player_data_provider)

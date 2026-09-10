@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recard"
-version = "0.4.8"
+version = "0.5.1"
 description = "Async Genshin Impact character card generator (Enka.Network showcase -> image), styled after zenka for ZZZ."
 readme = "README.md"
 requires-python = ">=3.10"
