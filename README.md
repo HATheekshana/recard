@@ -1,12 +1,83 @@
 # recard
 
-Async Genshin Impact character card generator, built the same way you'd use
-[`zenka`](https://pypi.org/project/zenka/) for Zenless Zone Zero: give it a
-UID, get back rendered card images.
+Async Genshin Impact character cards from a public Enka showcase or a
+cookie-authenticated HoYoLAB account.
+
+This README describes the current **0.6.0** source. Python **3.10+** is required.
+
+## Installation
+
+Install the published package:
 
 ```bash
-pip install ./recard   # local build, see "Installing" below
+python -m pip install --upgrade recard
 ```
+
+For owned characters outside the public showcase, install the optional HoYoLAB extra:
+
+```bash
+python -m pip install --upgrade "recard[hoyolab]"
+```
+
+To install this source version, run from the folder containing pyproject.toml:
+
+```bash
+python -m pip install .
+# With HoYoLAB support:
+python -m pip install ".[hoyolab]"
+```
+
+## Quick start
+
+```python
+import asyncio
+import recard
+
+async def main():
+    uid = 700000000  # Replace with your Genshin UID.
+    async with recard.Client() as client:
+        characters = await client.get_api(uid)
+        for character in characters:
+            print(character.id, character.name, character.element)
+
+        result = await client.card(uid, "Hu Tao", style="chevron")
+        for card in result.cards:
+            card.card.save(f"{card.id}.png")
+            # card.buffer contains the same rendered image encoded as JPEG.
+            # jpeg_bytes = card.buffer.getvalue()
+
+asyncio.run(main())
+```
+
+Select by name, positional numeric ID, or character_id:
+
+```python
+result = await client.card(uid, 10000046)
+result = await client.card(uid, character_id=10000046)
+result = await client.card(uid)  # All available characters.
+```
+
+Names are matched without case sensitivity, with partial matching as a fallback.
+A partial name can return multiple cards. Prefer exact names or IDs.
+
+## Card designs
+
+| Style | Layout |
+| --- | --- |
+| classic | Original single-character card; default. |
+| chevron | Angled talent/constellation divider, namecard background and translucent information panels. |
+| textured | Angled layout with a dark patterned information background and element accents. |
+| team | One compact 2400 × 600 character row. Use client.team() to combine rows. |
+
+Chevron and textured cards include artifact CV beside the main stat,
+glowing unlocked constellations, lock icons for locked constellations,
+and talent glow when the displayed talent level is at least 10.
+Artifact CV uses substats: **2 × CRIT Rate + CRIT DMG**.
+
+Traveler namecard backgrounds use **Mondstadt: Whistling Wind**.
+Missing namecard artwork falls back to the renderer's background.
+
+## Team cards: one to four characters
 
 ```python
 import asyncio
@@ -14,190 +85,136 @@ import recard
 
 async def main():
     async with recard.Client() as client:
-        # list everything currently in the player's public showcase
-        showcase = await client.get_api(700000000)
-        for char in showcase:
-            print(char.id, char.name, char.element)
-
-        # render one character by name
-        result = await client.card(700000000, "Hu Tao")
-        for card in result.cards:
-            card.card.save(f"{card.name}.png")   # card.card is a PIL.Image
-
-        # ...or by exact avatar ID, same call shape
-        result = await client.card(700000000, 10000046)
-
-        # or render the whole showcase at once
-        result = await client.card(700000000)
-        for card in result.cards:
-            card.card.save(f"{card.name}.png")
+        image = await client.team(700000000, ["Nahida", "Yelan"])
+        image.save("team.jpg", quality=95)
 
 asyncio.run(main())
 ```
 
-## How it works / limitations
+The result is one Pillow image, with rows in your requested order.
+Width is 2400 pixels; height is 600 multiplied by the character count.
+One character produces one row, with no empty slots for the other three.
 
-- Uses [enka-py](https://github.com/seriaati/enka-py), installed automatically
-  as the `enka` dependency. Public `Client.get_api()` and `Client.card()`
-  calls keep the same interface and return types.
-- Public Enka showcase access remains the default. Optional HoYoLAB access
-  can render owned characters outside the showcase; see below.
-- Character names, artwork, namecards, talents, constellations, weapons,
-  and artifacts come from enka-py's enriched models. The four bundled
-  metadata JSON files are no longer needed or shipped.
-- enka-py downloads its metadata on first use into `.enka_py/assets`
-  under the process working directory, which must be writable. First use
-  needs an internet connection. Refresh assets after game patches:
+Each row uses large splash art, the character name below it, a darkened namecard
+background, and translucent artifact, weapon and stat panels.
+Choose 1–4 distinct characters. Invalid counts, duplicate characters or
+ambiguous names raise ValueError.
 
-  ```python
-  async with recard.Client() as client:
-      await client.update_assets()
-  ```
-
-  The command `python -m recard.data.update_data` also performs this refresh.
-  Updates depend on the upstream asset sources supporting the new characters.
-- Network and parsing errors now propagate instead of appearing as an empty
-  showcase. An empty public showcase still returns an empty list; requesting
-  a missing character raises `recard.CharacterNotFound`.
-- Custom splash art is read from
-  `~/.recard/custom_splash/<char_id>.(png|jpg|jpeg|webp)`.
-- Internal JSON-path constructor options and old placeholder HoYoLAB hooks were
-  removed. Integrations using those internals should use the public Client.
-
-## Sketch layout (0.4.0)
-
-Use `style="chevron"` for the 2000 × 1200 layout based on the supplied sketch:
-large character artwork on the left, three talents and six constellations on
-the angled divider, weapon/player panels, right-hand stats, a character-name
-strip, and five artifacts in a 3-by-2 grid with the logo in the sixth cell.
+## HoYoLAB: characters outside the showcase
 
 ```python
-async with recard.Client(cookies=cookies) as client:
-    result = await client.card(uid, "Hu Tao", source="hoyolab", style="chevron")
-    for card in result.cards:
-        card.card.save(f"{card.id}.png")
-```
-
-For public showcase cards, omit `cookies` and use `source="enka"` (the default).
-`style="classic"` remains the default for existing callers. The new layout uses
-the same custom images, namecard backgrounds, and Traveler/Mondstadt fallback.
-Pass `custom_image="portrait.png"` for a one-time override. Artifact stats and
-talent levels are rendered dynamically; missing equipment is shown as not equipped.
-
-Validation: 25 tests pass, including both model sources, custom art, long labels,
-and layout selection. The preview uses a saved public Enka response and downloaded
-game artwork. Live cookie-authenticated access has not been tested.
-
-## Optional HoYoLAB cards (0.3.0)
-
-Install the optional dependency from this extracted project folder:
-
-```bash
-python -m pip install ".[hoyolab]"
-```
-
-After publishing this version to PyPI, users can install it with:
-
-```bash
-python -m pip install --upgrade "recard[hoyolab]"
-```
-
-Pass each user's own cookie dictionary when creating their client:
-
-```python
+import asyncio
 import os
 import recard
 
-cookies = {
-    "ltuid_v2": os.environ["LTUID_V2"],
-    "ltoken_v2": os.environ["LTOKEN_V2"],
-}
+async def main():
+    uid = 700000000  # Must belong to the cookie account.
+    cookies = {
+        "ltuid_v2": os.environ["LTUID_V2"],
+        "ltoken_v2": os.environ["LTOKEN_V2"],
+    }
+    async with recard.Client(cookies=cookies) as client:
+        roster = await client.get_api(uid, source="hoyolab")
+        result = await client.card(
+            uid, "Hu Tao", source="hoyolab", style="textured"
+        )
+        for card in result.cards:
+            card.card.save(f"{card.id}.png")
 
-async with recard.Client(cookies=cookies) as client:
-    roster = await client.get_api(uid, source="hoyolab")
-    result = await client.card(uid, "Hu Tao", source="hoyolab")
-    # IDs also work: client.card(uid, 10000046, source="hoyolab")
-    for card in result.cards:
-        card.card.save(f"{card.id}.png")
+        team = await client.team(
+            uid, ["Nahida", "Yelan"], source="hoyolab"
+        )
+        team.save("hoyolab-team.png")
+
+asyncio.run(main())
 ```
 
-`source="enka"` remains the default, even if cookies are supplied. HoYoLAB
-mode is explicit and independent of the public showcase. Omitting a character
-in HoYoLAB mode renders the returned owned roster; this may take time for large
-accounts. Selecting a character downloads only that character's detailed build.
+source="enka" is always the default, even when cookies are supplied.
+Use source="hoyolab" explicitly for the owned roster.
+Use region="cn" for Miyoushe; the default region is "os".
 
-The library verifies that the requested Genshin UID belongs to a linked account
-before requesting its roster or details. Use `region="cn"` for Miyoushe cookies;
-the default is `region="os"` for HoYoLAB. Each Client keeps a private copy of its
-cookie mapping in memory, with no global cookie account or cookie files.
-In a multi-user bot, create a Client using the requesting user's cookies.
+The library checks that the UID belongs to the authenticated account.
+Cookies are held in memory; the library does not save them to disk.
+A multi-user bot should use each requesting user's own cookies.
+Requesting the entire owned roster can take longer than selecting one character.
 
-Missing cookies, unlinked UIDs, failed authenticated requests, and incomplete
-details raise `recard.HoYoLABError`. HoYoLAB can require fresh cookies or account
-verification. The library does not change privacy settings or bypass verification.
-Missing characters raise `recard.CharacterNotFound`.
+## Custom artwork
 
-HoYoLAB cards now use enka-py's cached character metadata for namecard
-backgrounds, without requiring a public showcase. Banner artwork is tried first,
-then the full namecard. Aether and Lumine use Mondstadt: Whistling Wind in every element and source.
-Other characters with missing metadata or unavailable artwork use a neutral background. Run
-`await client.update_assets()` to refresh metadata after game patches.
-
-## Custom images (0.3.1)
-
-Works with both `source="enka"` and `source="hoyolab"`:
+Local image paths, encoded image bytes and Pillow images are accepted.
 
 ```python
-async with recard.Client(cookies=cookies, splash_directory="data/custom_splash") as client:
-    # Save by character ID, like the bot's !add_splash command.
-    client.set_custom_image(10000046, "my-hu-tao.png")
-    result = await client.card(uid, "Hu Tao", source="hoyolab")
-    for card in result.cards:
-        card.card.save(f"{card.id}.png")
+async with recard.Client(splash_directory="custom_splash") as client:
+    # Save a reusable override by character ID.
+    client.set_custom_image(10000046, "hu-tao.png")
 
-    # Override only this call; leave the saved image unchanged.
-    result = await client.card(uid, "Hu Tao", source="hoyolab",
-                               custom_image="another-image.jpg")
+    # Override this call without changing the saved image.
+    result = await client.card(
+        uid, 10000046, style="chevron", custom_image="portrait.webp"
+    )
 
-    # Remove the saved image to restore official artwork.
+    # Mapping keys must match the names or IDs used in the character list.
+    team = await client.team(
+        uid, [10000046, 10000060],
+        custom_images={10000046: "hu-tao.png", 10000060: "yelan.png"},
+    )
+    team.save("custom-team.png")
+
     client.remove_custom_image(10000046)
 ```
 
-Image arguments accept a local path, encoded image bytes, or a Pillow image.
-Saved images are normalized to PNG. Existing ID-named PNG/JPG/JPEG/WebP files
-in the configured folder are also recognized. The default folder remains
-`~/.recard/custom_splash`. A one-time override takes priority over the saved image;
-saved images take priority over official artwork. Custom images keep the bot's
-left-aligned crop and fade, while the namecard remains the background.
-If rendering multiple cards at once, a one-time override is applied to every card.
-For a multi-user bot, use a separate splash directory per user.
+Default directory: ~/.recard/custom_splash.
+ID-named PNG, JPG, JPEG and WebP files are recognized.
+Saved overrides are normalized to PNG.
+Priority: per-call override, saved custom image, official artwork.
+An override supplied to card() applies to every character selected by that call.
+Use a separate splash directory per user in a multi-user bot.
 
-See `examples/hoyolab_card.py` for a runnable example using environment variables.
-The Telegram bot's cookie-entry and storage interface is outside this library.
+## Return values and errors
 
-## Verification
+- get_api(): list of ShowcaseCharacter objects with id, name, element and rarity.
+- card(): CardResult with a cards list. Each Card has id, name, card
+  (Pillow image) and buffer (JPEG BytesIO).
+- team(): a single Pillow image.
+- CharacterNotFound: the requested character is unavailable in the selected source.
+- HoYoLABError: missing/invalid cookies, account mismatch or authenticated data failure.
+- ValueError: invalid source, style or team selection.
 
-Install the HoYoLAB extra, then run `python -m unittest discover -s tests -v`.
-Tests cover public and authenticated selection, account ownership checks, cookie
-isolation, error redaction, stat units, artifact levels, talents and rendering.
-Authenticated requests are mocked; a live cookie-authenticated request has not
-been verified for this release. Public Enka rendering was verified in 0.2.0.
+An empty showcase returns an empty list or CardResult when no specific
+character was requested. Network and parsing failures can propagate to callers.
 
-## Installing
+## Game metadata and updates
 
-This isn't published to PyPI yet. Until then:
+Character metadata comes from enka-py; the old bundled character/avatar metadata
+JSON files are no longer required. Initial asset downloads need internet access
+and a writable working directory for .enka_py/assets.
 
-```bash
-pip install ./recard
-# or, for local editing:
-pip install -e ./recard
+Refresh metadata after a game update:
+
+```python
+async with recard.Client() as client:
+    await client.update_assets()
 ```
 
-Once published:
+Or run:
 
 ```bash
-pip install recard
+python -m recard.data.update_data
 ```
+
+New content depends on upstream data availability. Metadata refresh does not
+upgrade the installed recard package.
+
+## Development
+
+From the source root:
+
+```bash
+python -m pip install -e ".[hoyolab]"
+python -m unittest discover -s tests -v
+```
+
+HoYoLAB tests use mocked authenticated responses; they are not proof of live
+cookie access. Card generation requires network access for uncached data/artwork.
 
 ## License
 
@@ -205,24 +222,10 @@ The code in this repository is MIT-licensed - see `LICENSE`.
 
 **Note on bundled assets:** `recard/assets/` ships
 fonts, icons, and character art from Genshin Impact,
-Â© COGNOSPHERE PTE. LTD. / HoYoverse. These are included for card
+© COGNOSPHERE PTE. LTD. / HoYoverse. These are included for card
 rendering purposes only, are not covered by this project's MIT license,
 and all rights to them remain with their original owner. This project
 is an unofficial fan tool and is not affiliated with or endorsed by
 HoYoverse.
 
 The enka-py dependency has its own GPL-3.0 license; see its repository for details.
-
-
-Chevron style in 0.4.1 uses a charcoal halftone background with element accents, no namecard background, and staggered talents. Custom character images remain supported.
-
-
-In 0.4.2 the namecard is clipped behind character art only (opaque custom images can cover it). Character level is larger; all three talents align in a straight diagonal row inside the strip.
-
-
-Version 0.4.4 restores the character namecard across chevron with 70%-opaque charcoal panels. Missing namecards fall back to the element texture.
-
-
-## Third style: textured
-
-Use `await client.card(uid, character_id, style="textured")` for the dark halftone background and solid charcoal info panels. Element accents, custom artwork, namecard behind character art, and artifact CV remain supported. Existing `classic` and `chevron` styles are unchanged.

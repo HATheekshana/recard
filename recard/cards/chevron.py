@@ -184,11 +184,11 @@ class ChevronCardGenerator(CharacterCardGenerator):
         draw.line([(600,24),(960,510),(500,1176)],fill=accent,width=2)
         for index,talent in enumerate(talents):
             x,y=[(666,189),(735,281),(804,373)][index]
-            self._medallion(canvas,(x,y),talent_images[index],str(talent.level),accent,True,31)
+            self._medallion(canvas,(x,y),talent_images[index],str(talent.level),accent,True,31,glow=talent.level >= 10)
         for index,constellation in enumerate(c.constellations[:6]):
             x=int(835-index*73); y=600+index*105
             icon=const_images[index] if index<len(const_images) else None
-            self._medallion(canvas,(x,y),icon,f'C{index+1}',accent,constellation.unlocked,31)
+            self._medallion(canvas,(x,y),icon,f'C{index+1}',accent,constellation.unlocked,31,glow=constellation.unlocked,locked=not constellation.unlocked)
         draw=ImageDraw.Draw(canvas)
         self._text(draw,(54,53),'CHARACTER BUILD',18,accent)
         # Weapon and player are stacked beside the top-right stat panel.
@@ -250,12 +250,20 @@ class ChevronCardGenerator(CharacterCardGenerator):
         draw.rectangle((12,12,1987,1187),outline='#555555',width=2)
         return canvas
 
-    def _medallion(self,canvas,xy,icon,label,accent,unlocked,radius):
+    def _medallion(self,canvas,xy,icon,label,accent,unlocked,radius,glow=False,locked=False):
         x,y=xy; draw=ImageDraw.Draw(canvas)
+        if glow:
+            halo=Image.new('RGBA',canvas.size)
+            hd=ImageDraw.Draw(halo)
+            rgb=ImageColor.getrgb(accent)
+            hd.ellipse((x-radius-4,y-radius-4,x+radius+4,y+radius+4),outline=rgb+(230,),width=9)
+            canvas.alpha_composite(halo.filter(ImageFilter.GaussianBlur(7)))
         draw.ellipse((x-radius-4,y-radius-4,x+radius+4,y+radius+4),fill='#101010',outline=accent if unlocked else '#526171',width=2)
         if icon is not None and not unlocked:
             icon=ImageEnhance.Brightness(ImageOps.grayscale(icon).convert('RGBA')).enhance(.4)
         self._paste(canvas,icon,(x-radius+8,y-radius+8,2*radius-16,2*radius-16))
+        if locked:
+            self._paste(canvas,self._local('assets/constant/closed/CLOSED.png'),(x-radius-4,y-radius-4,2*radius+8,2*radius+8))
         draw=ImageDraw.Draw(canvas)
         draw.rounded_rectangle((x-26,y+radius-6,x+26,y+radius+23),radius=9,fill='#090909')
         self._text(draw,(x,y+radius-3),label,18,accent if unlocked else '#8994a3',anchor='ma')

@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: recard
-Version: 0.5.1
+Version: 0.6.1
 Summary: Async Genshin Impact character card generator (Enka.Network showcase -> image), styled after zenka for ZZZ.
 Author: HATheekshana
 License: MIT
@@ -247,3 +247,8 @@ Version 0.4.4 restores the character namecard across chevron with 70%-opaque cha
 ## Third style: textured
 
 Use `await client.card(uid, character_id, style="textured")` for the dark halftone background and solid charcoal info panels. Element accents, custom artwork, namecard behind character art, and artifact CV remain supported. Existing `classic` and `chevron` styles are unchanged.
+
+
+## Team cards
+
+`image = await client.team(uid, ["Nahida", "Yelan"])` returns one PIL image. Save using `image.save("team.jpg")`. Choose 1–4 unique names or IDs. Height is exactly 600 pixels per character, width 2400. Pass `source="hoyolab"` for linked cookie accounts, and `custom_images={character_id: image_path}` for individual overrides (keys must match your character inputs). Saved custom images work as usual.

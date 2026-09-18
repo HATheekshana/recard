@@ -34,6 +34,7 @@ from typing import List, Optional
 from PIL import Image
 
 from .cards.character_card import CharacterCardGenerator
+from .cards.team import TeamRowGenerator
 from .cards.chevron import ChevronCardGenerator, TexturedCardGenerator
 from .services.hoyolab import HoYoLABError, HoYoLABProvider
 from .services.enka import enrich_namecards
@@ -163,9 +164,9 @@ class Client:
             character_id = character
             character = None
 
-        if style not in ("classic", "chevron", "textured"):
-            raise ValueError("style must be 'classic', 'chevron', or 'textured'.")
-        generator = self._classic if style == "classic" else (TexturedCardGenerator if style == "textured" else ChevronCardGenerator)(
+        if style not in ("classic", "chevron", "textured", "team"):
+            raise ValueError("style must be 'classic', 'chevron', 'textured', or 'team'.")
+        generator = self._classic if style == "classic" else (TeamRowGenerator if style == "team" else TexturedCardGenerator if style == "textured" else ChevronCardGenerator)(
             splash_directory=self._classic.splash_directory,
             font_path=self._classic.font_path,
             player_data_provider=self._classic.player_data_provider)
@@ -205,3 +206,27 @@ class Client:
             cards.append(Card(id=target.id, name=target.name, card=image, buffer=buffer))
 
         return CardResult(cards=cards)
+
+    async def team(self, uid, characters, *, source="enka", custom_images=None):
+        """Return one combined PIL image for 1–4 names/IDs in input order."""
+        if isinstance(characters,(str,bytes)):
+            raise ValueError("characters must be a list of 1 to 4 names or IDs")
+        characters=list(characters)
+        if not 1 <= len(characters) <= 4:
+            raise ValueError("Select between 1 and 4 characters")
+        rows=[]
+        seen=set()
+        for character in characters:
+            result=await self.card(uid,character,source=source,style="team",
+                custom_image=(custom_images or {}).get(character))
+            if len(result.cards)!=1:
+                raise ValueError(f"Character {character!r} is ambiguous; use an exact name or ID")
+            card=result.cards[0]
+            if card.id in seen:
+                raise ValueError("Select distinct characters")
+            seen.add(card.id)
+            rows.append(card.card.convert("RGB"))
+        combined=Image.new("RGB",(2400,600*len(rows)))
+        for i,row in enumerate(rows):
+            combined.paste(row,(0,600*i))
+        return combined

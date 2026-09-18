@@ -78,6 +78,7 @@ recard/cards/build.py
 recard/cards/character_card.py
 recard/cards/chevron.py
 recard/cards/hoyolab_character_detail.py
+recard/cards/team.py
 recard/cards/watermark.py
 recard/data/__init__.py
 recard/data/update_data.py
