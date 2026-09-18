@@ -3,7 +3,7 @@
 Async Genshin Impact character cards from a public Enka showcase or a
 cookie-authenticated HoYoLAB account.
 
-This README describes the current **0.6.0** source. Python **3.10+** is required.
+This README describes the current **0.6.1** source. Python **3.10+** is required.
 
 ## Installation
 
